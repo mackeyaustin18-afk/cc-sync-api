@@ -6,13 +6,23 @@
 
 const express = require('express');
 const cors    = require('cors');
+const crypto  = require('crypto');
 const fs      = require('fs');
 const path    = require('path');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-const SECRET   = process.env.SYNC_SECRET || 'change-me-in-railway-env';
+function readRequiredSecret(name) {
+  const value = process.env[name];
+  if (!value || !value.trim()) {
+    console.error(`${name} is required; refusing to start without an explicit sync secret.`);
+    process.exit(1);
+  }
+  return value;
+}
+
+const SECRET   = readRequiredSecret('SYNC_SECRET');
 const DATA_FILE = path.join(__dirname, 'data.json');
 const OPS_FILE  = path.join(__dirname, 'ops.json');   // ← NEW: agent ops board
 
@@ -77,9 +87,30 @@ app.use(cors({
 }));
 app.use(express.json());
 
+function extractAuthSecret(req) {
+  const authorization = req.headers.authorization;
+  if (typeof authorization === 'string') {
+    const match = authorization.match(/^Bearer\s+(.+)$/i);
+    if (match) return match[1];
+  }
+
+  const syncKey = req.headers['x-sync-key'];
+  if (Array.isArray(syncKey)) return syncKey[0];
+  return syncKey;
+}
+
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
 function requireAuth(req, res, next) {
-  const key = req.headers['x-sync-key'] || req.query.key;
-  if (key !== SECRET) return res.status(401).json({ error: 'Unauthorized. Provide x-sync-key header.' });
+  const key = extractAuthSecret(req);
+  if (!safeEqual(key, SECRET)) {
+    return res.status(401).json({ error: 'Unauthorized. Provide Authorization: Bearer token or x-sync-key header.' });
+  }
   next();
 }
 
