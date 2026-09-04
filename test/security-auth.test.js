@@ -2,6 +2,7 @@ const assert = require('assert');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -75,9 +76,16 @@ async function expectMissingSecretFailsClosed() {
 
 async function startServer() {
   const port = await getFreePort();
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-sync-auth-test-'));
   const child = spawn(process.execPath, [SERVER], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), SYNC_SECRET: TEST_SECRET },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      SYNC_SECRET: TEST_SECRET,
+      DATA_FILE: path.join(tempDir, 'data.json'),
+      OPS_FILE: path.join(tempDir, 'ops.json'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -90,7 +98,7 @@ async function startServer() {
     }
     try {
       const res = await request(port, 'GET', '/');
-      if (res.statusCode === 200) return { child, port };
+      if (res.statusCode === 200) return { child, port, tempDir };
     } catch (_) {
       // retry until server is ready
     }
@@ -98,6 +106,7 @@ async function startServer() {
   }
 
   child.kill('SIGKILL');
+  fs.rmSync(tempDir, { recursive: true, force: true });
   throw new Error(`server did not become ready: ${stderr}`);
 }
 
@@ -108,6 +117,7 @@ async function withServer(fn) {
   } finally {
     server.child.kill('SIGTERM');
     await wait(100);
+    fs.rmSync(server.tempDir, { recursive: true, force: true });
   }
 }
 
@@ -139,10 +149,6 @@ async function run() {
     });
     assert.strictEqual(badBearer.statusCode, 401, 'wrong bearer token should be rejected');
   });
-
-  for (const file of ['data.json', 'ops.json']) {
-    try { fs.unlinkSync(path.join(ROOT, file)); } catch (_) {}
-  }
 
   console.log('security auth checks passed');
 }
